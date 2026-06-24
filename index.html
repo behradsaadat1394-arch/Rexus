@@ -158,6 +158,7 @@
       align-items: center;
       color: #eef2ff;
       font-size: 13px;
+      position: relative;
     }
 
     .chat-selector select {
@@ -180,6 +181,57 @@
     .chat-selector select:disabled {
       opacity: 0.6;
       cursor: not-allowed;
+    }
+
+    /* Suggestions dropdown for add contact */
+    .suggestions {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 48px;
+      background: white;
+      color: #0f172a;
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.15);
+      max-height: 220px;
+      overflow: auto;
+      padding: 8px;
+      z-index: 2000;
+    }
+
+    .suggestion-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 8px;
+      border-radius: 6px;
+      cursor: default;
+    }
+
+    .suggestion-item + .suggestion-item {
+      margin-top: 6px;
+    }
+
+    .suggestion-name {
+      font-weight: 600;
+    }
+
+    .suggestion-add-btn {
+      padding: 6px 10px;
+      border-radius: 6px;
+      border: none;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    .suggestion-added {
+      padding: 6px 10px;
+      border-radius: 6px;
+      background: #e6edf9;
+      color: #0f172a;
+      font-size: 13px;
     }
 
     .status-dot {
@@ -363,8 +415,9 @@
         <select id="chatSelect" onchange="selectChatPartner(event)" disabled>
           <option value="">Select contact</option>
         </select>
-        <input id="addContactInput" type="text" placeholder="Add contact name" style="padding:6px 10px; border-radius:8px; border:1px solid rgba(255,255,255,0.12); background:transparent; color:white;">
-        <button id="addContactBtn" class="chat-mode-btn">Add</button>
+          <input id="addContactInput" type="text" placeholder="Add contact name" style="padding:6px 10px; border-radius:8px; border:1px solid rgba(255,255,255,0.12); background:transparent; color:white;">
+          <button id="addContactBtn" class="chat-mode-btn">Add</button>
+          <div id="addContactSuggestions" class="suggestions" style="display:none"></div>
         <button id="logoutBtn" class="chat-mode-btn hidden">Logout</button>
       </div>
       <div class="chat-mode" id="chatMode">Global chat</div>
@@ -431,6 +484,18 @@
       try { localStorage.setItem('chatUsers', JSON.stringify(users)); } catch (e) {}
     }
 
+    // Persist current logged-in user on this device
+    function saveCurrentUser() {
+      try {
+        if (currentUser) localStorage.setItem('chatCurrentUser', currentUser);
+        else localStorage.removeItem('chatCurrentUser');
+      } catch (e) {}
+    }
+
+    function clearCurrentUser() {
+      try { localStorage.removeItem('chatCurrentUser'); } catch (e) {}
+    }
+
     async function hashPassword(pw) {
       const enc = new TextEncoder();
       const data = enc.encode(pw);
@@ -442,6 +507,12 @@
     // Initialize on page load
     loadUsers();
     loadMessages();
+
+    // Restore persisted login for this device (keeps you logged in until you explicitly logout)
+    const _persisted = localStorage.getItem('chatCurrentUser');
+    if (_persisted && users[_persisted]) {
+      currentUser = _persisted;
+    }
 
     function updateChatMode() {
       const chatMode = document.getElementById('chatMode');
@@ -634,6 +705,7 @@
       const hash = await hashPassword(pw);
       if (hash !== users[name].passwordHash) { msgEl.textContent = 'Incorrect password'; return; }
       currentUser = name;
+      saveCurrentUser();
       updateAuthUI();
       updateChatSelector();
       renderMessages();
@@ -646,6 +718,7 @@
       if (confirm('Logout?')) {
         currentUser = null;
         activePartner = null;
+        clearCurrentUser();
         updateAuthUI();
         renderMessages();
       }
@@ -655,18 +728,112 @@
     document.getElementById('addContactBtn').addEventListener('click', () => {
       if (!currentUser) { alert('Login first'); return; }
       const val = document.getElementById('addContactInput').value.trim();
-      if (!val) { alert('Enter a name'); return; }
-      if (val === currentUser) { alert('Cannot add yourself'); return; }
-      if (!users[val]) { alert('That user does not exist'); return; }
+      const suggestionsEl = document.getElementById('addContactSuggestions');
+      if (!val) { suggestionsEl.style.display = 'none'; alert('Enter a name'); return; }
+      if (val === currentUser) { suggestionsEl.style.display = 'none'; alert('Cannot add yourself'); return; }
+
+      // Exact match -> add
+      if (users[val]) {
+        addContact(val);
+        suggestionsEl.style.display = 'none';
+        return;
+      }
+
+      // No exact match: compute suggestions
+      const matches = getMatchingUsers(val);
+      if (matches.length > 0) {
+        renderSuggestions(matches);
+        return; // let user pick from suggestions
+      }
+
+      // No matches -> show not found
+      alert('That user does not exist');
+    });
+
+    // Helper to add contact by name (used by suggestions and Add button)
+    function addContact(name) {
       const me = users[currentUser];
       me.contacts = me.contacts || [];
-      if (me.contacts.includes(val)) { alert('Contact already added'); return; }
-      me.contacts.push(val);
+      if (me.contacts.includes(name)) { alert('Contact already added'); return; }
+      me.contacts.push(name);
       saveUsers();
       updateChatSelector();
-      alert('Contact added: ' + val);
+      alert('Contact added: ' + name);
       document.getElementById('addContactInput').value = '';
+      document.getElementById('addContactSuggestions').style.display = 'none';
+    }
+
+    // Update suggestions on input
+    document.getElementById('addContactInput').addEventListener('input', (e) => {
+      const q = e.target.value.trim();
+      const suggestionsEl = document.getElementById('addContactSuggestions');
+      if (!q) { suggestionsEl.style.display = 'none'; return; }
+      const matches = getMatchingUsers(q);
+      if (matches.length > 0) {
+        renderSuggestions(matches);
+      } else {
+        suggestionsEl.style.display = 'none';
+      }
     });
+
+    // Compute matching users for query (case-insensitive substring/startswith)
+    function getMatchingUsers(q) {
+      if (!q) return [];
+      const ql = q.toLowerCase();
+      const all = Object.keys(users).filter(u => u !== currentUser);
+      const starts = [];
+      const includes = [];
+      all.forEach(u => {
+        const ul = u.toLowerCase();
+        if (ul.startsWith(ql)) starts.push(u);
+        else if (ul.includes(ql)) includes.push(u);
+      });
+      return starts.concat(includes).slice(0, 8);
+    }
+
+    // Render suggestions list
+    function renderSuggestions(matches) {
+      const suggestionsEl = document.getElementById('addContactSuggestions');
+      suggestionsEl.innerHTML = '';
+      matches.forEach(name => {
+        const item = document.createElement('div');
+        item.className = 'suggestion-item';
+
+        const left = document.createElement('div');
+        left.style.display = 'flex';
+        left.style.alignItems = 'center';
+        const nameEl = document.createElement('div');
+        nameEl.className = 'suggestion-name';
+        nameEl.textContent = name;
+        nameEl.style.cursor = 'pointer';
+        nameEl.title = 'Click to fill and add';
+        nameEl.addEventListener('click', () => {
+          document.getElementById('addContactInput').value = name;
+        });
+        left.appendChild(nameEl);
+
+        const right = document.createElement('div');
+        const me = users[currentUser] || {};
+        const contacts = me.contacts || [];
+        if (contacts.includes(name)) {
+          const badge = document.createElement('div');
+          badge.className = 'suggestion-added';
+          badge.textContent = 'Added';
+          right.appendChild(badge);
+        } else {
+          const btn = document.createElement('button');
+          btn.className = 'suggestion-add-btn';
+          btn.textContent = 'Add';
+          btn.addEventListener('click', () => addContact(name));
+          right.appendChild(btn);
+        }
+
+        item.appendChild(left);
+        item.appendChild(right);
+        suggestionsEl.appendChild(item);
+      });
+      suggestionsEl.style.display = 'block';
+    }
 
     // Send a message
     function sendMessage() {
