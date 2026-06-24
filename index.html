@@ -456,6 +456,7 @@
       <h2>Ban Management</h2>
       <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
         <input id="banSearch" class="ban-search" type="text" placeholder="Search usernames to ban/unban">
+        <button id="banUndoBtn" class="chat-mode-btn" title="Undo last ban/unban" style="display:none">Undo</button>
         <button id="closeBanBtn" class="chat-mode-btn">Close</button>
       </div>
       <div id="banList" class="ban-list"></div>
@@ -481,12 +482,6 @@
           <input id="addContactInput" type="text" placeholder="Add contact name" style="padding:6px 10px; border-radius:8px; border:1px solid rgba(255,255,255,0.12); background:transparent; color:white;">
           <button id="addContactBtn" class="chat-mode-btn">Add</button>
           <div id="addContactSuggestions" class="suggestions" style="display:none"></div>
-        <button id="exportBtn" class="chat-mode-btn" title="Export users & messages">Export</button>
-        <input id="importFile" type="file" accept="application/json" style="display:none">
-        <button id="importBtn" class="chat-mode-btn" title="Import users & messages">Import</button>
-        <label style="color:white; display:flex; align-items:center; gap:6px;">
-          <input id="autoExport" type="checkbox" style="width:14px; height:14px;"> Auto-export
-        </label>
         <button id="logoutBtn" class="chat-mode-btn hidden">Logout</button>
       </div>
       <div class="chat-mode" id="chatMode">Global chat</div>
@@ -537,8 +532,6 @@
       } catch (e) {
         console.error('Failed to save messages:', e);
       }
-      // auto-export if enabled
-      try { if (document.getElementById('autoExport') && document.getElementById('autoExport').checked) exportData(); } catch (e) {}
     }
 
     // User storage helpers
@@ -553,8 +546,6 @@
 
     function saveUsers() {
       try { localStorage.setItem('chatUsers', JSON.stringify(users)); } catch (e) {}
-      // auto-export if enabled
-      try { if (document.getElementById('autoExport') && document.getElementById('autoExport').checked) exportData(); } catch (e) {}
     }
 
     // Persist current logged-in user on this device
@@ -570,6 +561,8 @@
     }
 
     // Ban management: open/close modal, render list, ban/unban users
+    const banActionStack = [];
+
     function openBanModal() {
       if (!currentUser) { alert('Login required to open ban panel'); return; }
       const modal = document.getElementById('banModal');
@@ -622,28 +615,38 @@
           btn.textContent = 'Unban';
           btn.addEventListener('click', () => {
             if (!confirm('Unban ' + name + '?')) return;
+            // push previous state for undo
+            banActionStack.push({ user: name, prev: JSON.parse(JSON.stringify(users[name] || null)) });
             users[name].banned = false;
             delete users[name].banReason;
             delete users[name].bannedAt;
             delete users[name].bannedBy;
             saveUsers();
             renderBanList(document.getElementById('banSearch').value.trim());
+            updateUndoButton();
           });
-          right.appendChild(btn);
+          right.appendChild(btna);
         } else {
           const btn = document.createElement('button');
           btn.className = 'ban-btn ban';
           btn.textContent = 'Ban';
           btn.addEventListener('click', () => {
             if (name === currentUser) { alert('You cannot ban yourself'); return; }
+            // require admin code before banning
+            const auth = prompt('Enter admin code to ban ' + name + ':');
+            if (auth === null) return; // cancelled
+            if (String(auth).trim() !== '1394') { alert('Incorrect admin code'); return; }
             const reason = prompt('Reason for banning ' + name + '? (optional)');
             if (reason === null) return; // cancelled
+            // push previous state for undo
+            banActionStack.push({ user: name, prev: JSON.parse(JSON.stringify(users[name] || null)) });
             users[name].banned = true;
             users[name].banReason = reason || '';
             users[name].bannedAt = Date.now();
             users[name].bannedBy = currentUser;
             saveUsers();
             renderBanList(document.getElementById('banSearch').value.trim());
+            updateUndoButton();
           });
           right.appendChild(btn);
         }
@@ -658,7 +661,9 @@
     document.addEventListener('keydown', (e) => {
       if (e.key === 'F3') {
         e.preventDefault();
-        openBanModal();
+        const modal = document.getElementById('banModal');
+        if (modal && !modal.classList.contains('hidden')) closeBanModal();
+        else openBanModal();
       }
     });
 
@@ -672,79 +677,40 @@
       if (search) search.addEventListener('input', (e) => renderBanList(e.target.value.trim()));
     });
 
-    // Export/Import utilities
-    function getAllData() {
-      return { users: users, messages: messages };
-    }
-
-    function exportData() {
-      const data = getAllData();
-      const json = JSON.stringify(data, null, 2);
-      try {
-        const blob = new Blob([json], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        const now = new Date();
-        const stamp = now.toISOString().replace(/[:.]/g, '-');
-        a.download = `rexus-backup-${stamp}.json`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-      } catch (e) {
-        console.error('Export failed', e);
-        alert('Export failed: ' + e.message);
-      }
-    }
-
-    function importDataFromFile(file) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        try {
-          const parsed = JSON.parse(reader.result);
-          if (!parsed || typeof parsed !== 'object') throw new Error('Invalid file');
-          // Ask user whether to merge or overwrite
-          const choice = confirm('Click OK to overwrite local data with the imported file. Click Cancel to merge imported users/messages into local data.');
-          if (choice) {
-            users = parsed.users || {};
-            messages = parsed.messages || [];
+    // Hook up ban modal undo and other DOM wiring
+    document.addEventListener('DOMContentLoaded', () => {
+      // ban modal controls: undo and update undo button state
+      const banUndoBtn = document.getElementById('banUndoBtn');
+      if (banUndoBtn) {
+        banUndoBtn.addEventListener('click', () => {
+          if (banActionStack.length === 0) return;
+          const act = banActionStack.pop();
+          if (!act) return;
+          if (act.prev === null) {
+            // user didn't exist before: remove
+            delete users[act.user];
           } else {
-            // Merge users (overwrite by imported)
-            const incomingUsers = parsed.users || {};
-            Object.keys(incomingUsers).forEach(k => { users[k] = incomingUsers[k]; });
-            // Append messages
-            const incomingMsgs = Array.isArray(parsed.messages) ? parsed.messages : [];
-            messages = messages.concat(incomingMsgs);
+            users[act.user] = act.prev;
           }
           saveUsers();
-          saveMessages();
-          updateChatSelector();
-          renderMessages();
-          alert('Import complete');
-        } catch (e) {
-          console.error('Import error', e);
-          alert('Import failed: ' + e.message);
-        }
-      };
-      reader.readAsText(file);
-    }
-
-    // Hook up Export / Import UI
-    document.addEventListener('DOMContentLoaded', () => {
-      const exportBtn = document.getElementById('exportBtn');
-      const importBtn = document.getElementById('importBtn');
-      const importFile = document.getElementById('importFile');
-      if (exportBtn) exportBtn.addEventListener('click', exportData);
-      if (importBtn && importFile) {
-        importBtn.addEventListener('click', () => importFile.click());
-        importFile.addEventListener('change', (e) => {
-          const f = e.target.files && e.target.files[0];
-          if (f) importDataFromFile(f);
-          importFile.value = '';
+          renderBanList(document.getElementById('banSearch').value.trim());
+          updateUndoButton();
+          alert('Undo applied');
         });
       }
+      updateUndoButton();
+      // previously Export/Import hooks removed
     });
+
+    function updateUndoButton() {
+      const btn = document.getElementById('banUndoBtn');
+      if (!btn) return;
+      if (banActionStack.length > 0) {
+        btn.style.display = '';
+      } else {
+        btn.style.display = 'none';
+      }
+    }
 
     async function hashPassword(pw) {
       const enc = new TextEncoder();
