@@ -234,6 +234,54 @@
       font-size: 13px;
     }
 
+    /* Ban modal styles */
+    .ban-modal .ban-form {
+      background: white;
+      padding: 24px;
+      border-radius: 10px;
+      width: 480px;
+      max-width: calc(100% - 40px);
+      box-shadow: 0 12px 36px rgba(2,6,23,0.2);
+      text-align: left;
+    }
+
+    .ban-modal .ban-form h2 {
+      margin-bottom: 12px;
+      font-size: 20px;
+      color: #111827;
+    }
+
+    .ban-modal .ban-search {
+      width: 100%;
+      padding: 8px 10px;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      margin-bottom: 12px;
+    }
+
+    .ban-list {
+      max-height: 320px;
+      overflow: auto;
+      border-top: 1px solid #eef2ff;
+      padding-top: 8px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .ban-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px;
+      border-radius: 8px;
+      background: #f8fafc;
+    }
+
+    .ban-item .meta { color: #6b7280; font-size: 12px; }
+    .ban-item .ban-btn { padding: 6px 10px; border-radius: 6px; border: none; cursor: pointer; }
+    .ban-btn.ban { background: #ef4444; color: white; }
+    .ban-btn.unban { background: #10b981; color: white; }
+
     .status-dot {
       display: inline-block;
       width: 8px;
@@ -402,6 +450,21 @@
     </div>
   </div>
 
+  <!-- Ban management modal (opened with F3) -->
+  <div class="name-modal ban-modal hidden" id="banModal">
+    <div class="ban-form">
+      <h2>Ban Management</h2>
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+        <input id="banSearch" class="ban-search" type="text" placeholder="Search usernames to ban/unban">
+        <button id="closeBanBtn" class="chat-mode-btn">Close</button>
+      </div>
+      <div id="banList" class="ban-list"></div>
+      <div style="margin-top:12px; text-align:right;">
+        <button id="banCloseFooter" class="chat-mode-btn">Done</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Chat container -->
   <div class="container">
     <div class="header">
@@ -418,6 +481,12 @@
           <input id="addContactInput" type="text" placeholder="Add contact name" style="padding:6px 10px; border-radius:8px; border:1px solid rgba(255,255,255,0.12); background:transparent; color:white;">
           <button id="addContactBtn" class="chat-mode-btn">Add</button>
           <div id="addContactSuggestions" class="suggestions" style="display:none"></div>
+        <button id="exportBtn" class="chat-mode-btn" title="Export users & messages">Export</button>
+        <input id="importFile" type="file" accept="application/json" style="display:none">
+        <button id="importBtn" class="chat-mode-btn" title="Import users & messages">Import</button>
+        <label style="color:white; display:flex; align-items:center; gap:6px;">
+          <input id="autoExport" type="checkbox" style="width:14px; height:14px;"> Auto-export
+        </label>
         <button id="logoutBtn" class="chat-mode-btn hidden">Logout</button>
       </div>
       <div class="chat-mode" id="chatMode">Global chat</div>
@@ -468,6 +537,8 @@
       } catch (e) {
         console.error('Failed to save messages:', e);
       }
+      // auto-export if enabled
+      try { if (document.getElementById('autoExport') && document.getElementById('autoExport').checked) exportData(); } catch (e) {}
     }
 
     // User storage helpers
@@ -482,6 +553,8 @@
 
     function saveUsers() {
       try { localStorage.setItem('chatUsers', JSON.stringify(users)); } catch (e) {}
+      // auto-export if enabled
+      try { if (document.getElementById('autoExport') && document.getElementById('autoExport').checked) exportData(); } catch (e) {}
     }
 
     // Persist current logged-in user on this device
@@ -495,6 +568,183 @@
     function clearCurrentUser() {
       try { localStorage.removeItem('chatCurrentUser'); } catch (e) {}
     }
+
+    // Ban management: open/close modal, render list, ban/unban users
+    function openBanModal() {
+      if (!currentUser) { alert('Login required to open ban panel'); return; }
+      const modal = document.getElementById('banModal');
+      modal.classList.remove('hidden');
+      renderBanList();
+      document.getElementById('banSearch').focus();
+    }
+
+    function closeBanModal() {
+      const modal = document.getElementById('banModal');
+      modal.classList.add('hidden');
+    }
+
+    function formatDate(ts) {
+      if (!ts) return '';
+      try { return new Date(ts).toLocaleString(); } catch (e) { return '';} 
+    }
+
+    function renderBanList(filter) {
+      const container = document.getElementById('banList');
+      container.innerHTML = '';
+      const names = Object.keys(users).sort((a,b)=> a.localeCompare(b));
+      const q = (filter || '').toLowerCase();
+      names.forEach(name => {
+        if (q && !name.toLowerCase().includes(q)) return;
+        const info = users[name] || {};
+        const item = document.createElement('div');
+        item.className = 'ban-item';
+
+        const left = document.createElement('div');
+        const title = document.createElement('div');
+        title.textContent = name + (info.banned ? ' (banned)' : '');
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        const created = info.createdAt ? formatDate(info.createdAt) : '';
+        const reason = info.banned ? ('Reason: ' + (info.banReason || '—')) : '';
+        meta.textContent = created + (created && reason ? ' • ' : '') + reason;
+        left.appendChild(title);
+        left.appendChild(meta);
+
+        const right = document.createElement('div');
+        if (name === currentUser) {
+          const note = document.createElement('div');
+          note.className = 'meta';
+          note.textContent = 'You';
+          right.appendChild(note);
+        } else if (info.banned) {
+          const btn = document.createElement('button');
+          btn.className = 'ban-btn unban';
+          btn.textContent = 'Unban';
+          btn.addEventListener('click', () => {
+            if (!confirm('Unban ' + name + '?')) return;
+            users[name].banned = false;
+            delete users[name].banReason;
+            delete users[name].bannedAt;
+            delete users[name].bannedBy;
+            saveUsers();
+            renderBanList(document.getElementById('banSearch').value.trim());
+          });
+          right.appendChild(btn);
+        } else {
+          const btn = document.createElement('button');
+          btn.className = 'ban-btn ban';
+          btn.textContent = 'Ban';
+          btn.addEventListener('click', () => {
+            if (name === currentUser) { alert('You cannot ban yourself'); return; }
+            const reason = prompt('Reason for banning ' + name + '? (optional)');
+            if (reason === null) return; // cancelled
+            users[name].banned = true;
+            users[name].banReason = reason || '';
+            users[name].bannedAt = Date.now();
+            users[name].bannedBy = currentUser;
+            saveUsers();
+            renderBanList(document.getElementById('banSearch').value.trim());
+          });
+          right.appendChild(btn);
+        }
+
+        item.appendChild(left);
+        item.appendChild(right);
+        container.appendChild(item);
+      });
+    }
+
+    // F3 opens the ban modal (while focused anywhere)
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'F3') {
+        e.preventDefault();
+        openBanModal();
+      }
+    });
+
+    // Wire up ban modal controls
+    document.addEventListener('DOMContentLoaded', () => {
+      const closeBtn = document.getElementById('closeBanBtn');
+      const footerClose = document.getElementById('banCloseFooter');
+      const search = document.getElementById('banSearch');
+      if (closeBtn) closeBtn.addEventListener('click', closeBanModal);
+      if (footerClose) footerClose.addEventListener('click', closeBanModal);
+      if (search) search.addEventListener('input', (e) => renderBanList(e.target.value.trim()));
+    });
+
+    // Export/Import utilities
+    function getAllData() {
+      return { users: users, messages: messages };
+    }
+
+    function exportData() {
+      const data = getAllData();
+      const json = JSON.stringify(data, null, 2);
+      try {
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const now = new Date();
+        const stamp = now.toISOString().replace(/[:.]/g, '-');
+        a.download = `rexus-backup-${stamp}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        console.error('Export failed', e);
+        alert('Export failed: ' + e.message);
+      }
+    }
+
+    function importDataFromFile(file) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const parsed = JSON.parse(reader.result);
+          if (!parsed || typeof parsed !== 'object') throw new Error('Invalid file');
+          // Ask user whether to merge or overwrite
+          const choice = confirm('Click OK to overwrite local data with the imported file. Click Cancel to merge imported users/messages into local data.');
+          if (choice) {
+            users = parsed.users || {};
+            messages = parsed.messages || [];
+          } else {
+            // Merge users (overwrite by imported)
+            const incomingUsers = parsed.users || {};
+            Object.keys(incomingUsers).forEach(k => { users[k] = incomingUsers[k]; });
+            // Append messages
+            const incomingMsgs = Array.isArray(parsed.messages) ? parsed.messages : [];
+            messages = messages.concat(incomingMsgs);
+          }
+          saveUsers();
+          saveMessages();
+          updateChatSelector();
+          renderMessages();
+          alert('Import complete');
+        } catch (e) {
+          console.error('Import error', e);
+          alert('Import failed: ' + e.message);
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    // Hook up Export / Import UI
+    document.addEventListener('DOMContentLoaded', () => {
+      const exportBtn = document.getElementById('exportBtn');
+      const importBtn = document.getElementById('importBtn');
+      const importFile = document.getElementById('importFile');
+      if (exportBtn) exportBtn.addEventListener('click', exportData);
+      if (importBtn && importFile) {
+        importBtn.addEventListener('click', () => importFile.click());
+        importFile.addEventListener('change', (e) => {
+          const f = e.target.files && e.target.files[0];
+          if (f) importDataFromFile(f);
+          importFile.value = '';
+        });
+      }
+    });
 
     async function hashPassword(pw) {
       const enc = new TextEncoder();
