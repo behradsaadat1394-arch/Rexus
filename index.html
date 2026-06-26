@@ -1066,7 +1066,7 @@
 
       const msg = {
         name: currentUser,
-        text: text,
+        text: encodeSecret(text),
         to: activePartner,
         timestamp: timestamp
       };
@@ -1149,10 +1149,48 @@
       });
 
       // default to login view
-      document.getElementById('showLogin').click();
+      document.getElementById('showLogin').click(); 
       updateAuthUI();
       updateChatSelector();
     });
-  </script>
+  
+const secretAlphabet={a:"▲",b:"■",c:"●",d:"◆",e:"★",f:"☾",g:"☀",h:"♢",i:"○",j:"△",k:"□",l:"◇",m:"♥",n:"♣",o:"♠",p:"☁",q:"☂",r:"☄",s:"✦",t:"✪",u:"✿",v:"❖",w:"✧",x:"☯",y:"☘",z:"☠"};
+function encodeSecret(text){return [...text].map(ch=>secretAlphabet[ch.toLowerCase()]||ch).join("");}
+let chartOpen=false;
+document.addEventListener('keydown',(e)=>{
+ if(e.code==='ControlRight'){
+   e.preventDefault();
+   chartOpen=!chartOpen;
+   document.getElementById('secretChart').style.display=chartOpen?'block':'none';
+ }
+});
+function closeSecretChart(){
+ chartOpen=false;
+ document.getElementById('secretChart').style.display='none';
+}
+
+</script>
+
+  <div id="secretChart" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#222;color:white;padding:20px;border-radius:10px;border:2px solid #555;z-index:9999;max-height:80vh;overflow:auto;font-family:Arial;">
+  <h2>🔐 Secret Language Chart</h2>
+  <p>A=▲ B=■ C=● D=◆ E=★</p>
+  <p>F=☾ G=☀ H=♢ I=○ J=△</p>
+  <p>K=□ L=◇ M=♥ N=♣ O=♠</p>
+  <p>P=☁ Q=☂ R=☄ S=✦ T=✪</p>
+  <p>U=✿ V=❖ W=✧ X=☯ Y=☘ Z=☠</p>
+  <button onclick="closeSecretChart()">Close</button>
+  </div>
+
+  <div id="secretChart" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#222;color:white;padding:20px;border-radius:10px;z-index:9999;">
+  <h2>Secret Language</h2>
+  <p>A=▲ B=■ C=● D=◆ E=★</p>
+  <p>F=☾ G=☀ H=♢ I=○ J=△</p>
+  <p>K=□ L=◇ M=♥ N=♣ O=♠</p>
+  <p>P=☁ Q=☂ R=☄ S=✦ T=✪</p>
+  <p>U=✿ V=❖ W=✧ X=☯ Y=☘ Z=☠</p>
+  <button onclick="closeSecretChart()">Close</button>
+</div>
+
 </body>
 </html>
+
